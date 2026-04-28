@@ -188,7 +188,6 @@ export default function Dashboard() {
   );
 }
 
-export default Dashboard;
 
 // Dữ liệu mẫu (Mock Data) trong trường hợp Backend chưa có dữ liệu thật
 const mockOrders: Order[] = [

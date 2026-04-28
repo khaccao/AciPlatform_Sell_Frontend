@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
 import Login from './pages/Login';
 
 // Component to handle extracting token from URL (when embedded in Iframe)
-function TokenCatcher({ children }: { children: JSX.Element }) {
+function TokenCatcher({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [isReady, setIsReady] = useState(false);
@@ -27,7 +27,7 @@ function TokenCatcher({ children }: { children: JSX.Element }) {
 }
 
 // Private Route Guard
-function PrivateRoute({ children }: { children: JSX.Element }) {
+function PrivateRoute({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem('sell_token');
   return token ? children : <Navigate to="/login" replace />;
 }
