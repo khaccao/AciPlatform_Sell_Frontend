@@ -1,0 +1,58 @@
+name: Build and Deploy Sell Frontend
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            SELL_FRONTEND_DIR="/root/apps/AciPlatform_Sell_Frontend"
+            
+            # 1. Update/Clone Sell Frontend Code
+            if [ ! -d "$SELL_FRONTEND_DIR/.git" ]; then
+                echo "Sell Frontend directory not found, cloning..."
+                mkdir -p $SELL_FRONTEND_DIR
+                cd $SELL_FRONTEND_DIR
+                git clone -b main https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git .
+            else
+                cd $SELL_FRONTEND_DIR
+                echo "Updating Sell Frontend from main..."
+                git fetch origin main
+                git reset --hard origin/main
+            fi
+            
+            # 2. Build and Deploy Docker Container
+            echo "Building Docker image..."
+            docker build -t aciplatform-sell-frontend .
+            
+            echo "Removing old container if exists..."
+            docker rm -f aciplatform-sell-frontend || true
+            
+            echo "Starting new container in aciplatform-network..."
+            docker run -d \
+              --name aciplatform-sell-frontend \
+              --network aciplatform_aciplatform-network \
+              --restart unless-stopped \
+              -p 8081:80 \
+              aciplatform-sell-frontend
+            
+            # 3. Show Status
+            sleep 3
+            docker ps | grep aciplatform-sell-frontend
