@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { ShoppingCart, FileText, Plus, Search, RefreshCw, X, MoreHorizontal, Check, Clock } from 'lucide-react';
 import { format } from 'date-fns';
 
