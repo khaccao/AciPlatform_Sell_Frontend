@@ -9,12 +9,84 @@ on:
       - main
   workflow_dispatch:
 
+env:
+  REGISTRY: ghcr.io
+
 jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+  docker-build:
+    needs: build-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Lowercase image name
+        run: |
+          echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
   deploy:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: docker-build
     runs-on: ubuntu-latest
 
     steps:
+      - name: Lowercase image name
+        run: |
+          echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
+
       - name: Deploy to VPS
         uses: appleboy/ssh-action@master
         with:
@@ -23,36 +95,42 @@ jobs:
           password: ${{ secrets.VPS_PASSWORD }}
           script: |
             set -e
-            SELL_FRONTEND_DIR="/root/apps/AciPlatform_Sell_Frontend"
             
-            # 1. Update/Clone Sell Frontend Code
-            if [ ! -d "$SELL_FRONTEND_DIR/.git" ]; then
-                echo "Sell Frontend directory not found, cloning..."
-                mkdir -p $SELL_FRONTEND_DIR
-                cd $SELL_FRONTEND_DIR
-                git clone -b main https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git .
-            else
-                cd $SELL_FRONTEND_DIR
-                echo "Updating Sell Frontend from main..."
-                git fetch origin main
-                git reset --hard origin/main
-            fi
+            # Lowercase repository name manually since bash expansion from github env might not exist inside ssh-action script context
+            REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+            IMAGE_URI="${{ env.REGISTRY }}/$REPO_NAME:latest"
             
-            # 2. Build and Deploy Docker Container
-            echo "Building Docker image..."
-            docker build -t aciplatform-sell-frontend .
+            echo "1. Login to GitHub Container Registry"
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
             
-            echo "Removing old container if exists..."
+            echo "2. Pulling latest image..."
+            docker pull $IMAGE_URI
+            
+            echo "3. Restarting container..."
             docker rm -f aciplatform-sell-frontend || true
             
-            echo "Starting new container in aciplatform-network..."
             docker run -d \
               --name aciplatform-sell-frontend \
               --network aciplatform_aciplatform-network \
               --restart unless-stopped \
               -p 8081:80 \
-              aciplatform-sell-frontend
+              $IMAGE_URI
             
-            # 3. Show Status
+            echo "4. Show Status"
             sleep 3
             docker ps | grep aciplatform-sell-frontend
+
+  notify:
+    if: always()
+    needs: [build-test, docker-build, deploy]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check deployment status
+        run: |
+          if [ "${{ needs.deploy.result }}" == "success" ] || [ "${{ needs.deploy.result }}" == "skipped" ]; then
+            echo "Deployment successful!"
+          else
+            echo "Deployment failed!"
+            exit 1
+          fi
